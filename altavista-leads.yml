@@ -1,0 +1,38 @@
+name: AltaVista Leads
+
+on:
+  schedule:
+    - cron: '*/15 * * * *' # every 15 minutes; adjust as needed
+  workflow_dispatch: {} # allows manual "Run workflow" button in GitHub UI
+
+concurrency:
+  group: altavista-leads
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run AltaVista lead automation
+        run: node scripts/altavista-leads.js
+        env:
+          # Required now
+          PIPEDRIVE_API_TOKEN: ${{ secrets.PIPEDRIVE_API_TOKEN }}
+          PHOENIX_PIPELINE_ID: ${{ secrets.PHOENIX_PIPELINE_ID }}
+          PHOENIX_STAGE_ID: ${{ secrets.PHOENIX_STAGE_ID }}
+          PIPEDRIVE_DOMAIN: aether
+          # Placeholders - not used yet, Gmail API integration is not implemented.
+          # Set these once listCandidateMessages/fetchMessage/markMessageProcessed
+          # in scripts/altavista-leads.js are implemented for real.
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
