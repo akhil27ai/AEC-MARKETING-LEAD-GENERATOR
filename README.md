@@ -1,86 +1,79 @@
 # AltaVista Leads -> Pipedrive
 
-Watches for AltaVista lead emails (subject `AltaVista Client Opportunity...`,
-from `altavistasp.com`) and creates a Person + Organization + Deal in
-Pipedrive's Phoenix BizDev pipeline, with the extracted lead fields attached
-as a note. Runs on a schedule via GitHub Actions.
+Runs a Node.js worker every 15 minutes from GitHub Actions. The worker reads
+the currently synced Pipedrive mailbox for `akhil@automationinterns.com`,
+identifies forwarded AltaVista lead messages, and creates CRM records in this
+order:
 
-## Current status
+1. Find or create Organization.
+2. Find or create Person linked to that Organization.
+3. Create Deal linked to both.
 
-| Part | Status |
+There is no Gmail API integration, Google Cloud project, OAuth client, Gmail
+refresh token, or `googleapis` dependency.
+
+## How Matching Works
+
+The worker scans Pipedrive inbox mail threads, then fetches and evaluates each
+individual message inside the thread. A message is treated as an AltaVista lead
+only when all of these are true:
+
+- The subject matches `ALTAVISTA_SUBJECT_MATCH` after normalizing prefixes such
+  as `Fwd:` and `Re:`.
+- The body contains an AltaVista marker such as `AltaVista`, `Alta Vista`, or
+  `altavistasp.com`.
+- The parsed body contains the expected fields `Name:`, `Email:`, and
+  `Inquiry:`.
+
+This is deliberate: one Pipedrive conversation can contain more than one email,
+so duplicate detection and deal creation happen per message, not per
+conversation.
+
+## Duplicate Protection
+
+The account now has a deal custom field named `AltaVista Intake Key`. The worker
+stores a stable hash of the lead content in that field and searches it before
+creating a deal. This prevents duplicates even if the mailbox changes later or
+the same lead is forwarded again.
+
+## Successful Processing
+
+After all matched AltaVista messages in a Pipedrive conversation are processed,
+the worker links the mailbox thread to the created or existing deal, shares that
+matched thread with the team, marks it read, and archives it. Non-matching
+threads are not shared or archived by the worker.
+
+If the synced mailbox changes later, connect the replacement mailbox to the same
+Pipedrive user. The code reads through Pipedrive Mailbox API and does not depend
+on the mailbox provider.
+
+## Configuration
+
+Local config lives in `.env` and GitHub Actions config lives in repository
+secrets or workflow env values.
+
+| Name | Purpose |
 |---|---|
-| Field parsing (name, company, title, phone, email, address, inquiry) | Done - unit-tested against a real sample AltaVista email |
-| Pipedrive person / organization / deal creation, duplicate check, note | Done - logic complete, not yet run against the live API |
-| Gmail message fetching | **Placeholder - not implemented** |
+| `PIPEDRIVE_API_TOKEN` | Pipedrive API token |
+| `PIPEDRIVE_DOMAIN` | Pipedrive company domain, e.g. `aether` |
+| `PIPEDRIVE_PIPELINE_ID` | Pipeline ID for new deals |
+| `PIPEDRIVE_STAGE_ID` | Stage ID for new deals |
+| `ALTAVISTA_INTAKE_KEY_FIELD` | API key for the `AltaVista Intake Key` deal custom field |
+| `ALTAVISTA_SUBJECT_MATCH` | Normalized subject target |
+| `ALTAVISTA_MAX_AGE_HOURS` | Maximum message age to process |
+| `ALTAVISTA_BATCH_SIZE` | Inbox thread batch size per run |
 
-The three functions that need real implementations are in
-`scripts/altavista-leads.js`:
+Current live values:
 
-- `listCandidateMessages(cfg)` - should return an array of Gmail message ids
-  matching the subject/sender filter that haven't been labeled processed yet.
-- `fetchMessage(cfg, id)` - should return `{ id, from, body, receivedAt }` for
-  one message.
-- `markMessageProcessed(cfg, id)` - should label the message processed (create
-  the label if needed) and mark it read.
+- `PIPEDRIVE_DOMAIN=aether`
+- `PIPEDRIVE_PIPELINE_ID=28` (`Phoenix-BizDev`)
+- `PIPEDRIVE_STAGE_ID=178` (`Qualified`)
 
-Right now `listCandidateMessages` just returns `[]` and logs a TODO, so the
-script runs successfully end-to-end but processes nothing until Gmail access
-is wired up.
+## Running Locally
 
-## Setup (works today, without Gmail)
+```sh
+npm install
+npm start
+```
 
-1. Copy `.env.example` to `.env` and fill in the Pipedrive values:
-   - `PIPEDRIVE_API_TOKEN` - your Pipedrive API token.
-   - `PHOENIX_PIPELINE_ID` - from Pipedrive: Deals > pipeline dropdown > edit
-     pipeline > the ID is in the URL.
-   - `PHOENIX_STAGE_ID` - optional, omit to use the pipeline's default stage.
-2. `npm install` (no dependencies yet, since Gmail's `googleapis` package
-   isn't wired in - this just confirms the project installs cleanly).
-3. `node scripts/altavista-leads.js` - will log "Found 0 candidate message(s)"
-   and exit cleanly. That's expected until Gmail fetching is implemented.
-
-## GitHub Secrets
-
-Repo Settings > Secrets and variables > Actions > New repository secret:
-
-| Secret | Needed now? | Value |
-|---|---|---|
-| `PIPEDRIVE_API_TOKEN` | Yes | Your Pipedrive API token |
-| `PHOENIX_PIPELINE_ID` | Yes | Phoenix BizDev pipeline ID |
-| `PHOENIX_STAGE_ID` | No | Optional specific stage |
-| `GMAIL_CLIENT_ID` | Not yet | Placeholder until Gmail API is implemented |
-| `GMAIL_CLIENT_SECRET` | Not yet | Placeholder until Gmail API is implemented |
-| `GMAIL_REFRESH_TOKEN` | Not yet | Placeholder until Gmail API is implemented |
-
-The workflow (`.github/workflows/altavista-leads.yml`) already references all
-six - the Gmail ones can be left empty for now, they're just unused env vars
-until the placeholder functions are filled in.
-
-## Implementing Gmail API (future work)
-
-When ready to wire this up for real, using the Gmail API with OAuth2 (assumes
-this runs against a regular Gmail/Workspace mailbox under your own control,
-not a Workspace-admin service account):
-
-1. Google Cloud Console: enable the **Gmail API**, create an OAuth client
-   (Application type: Desktop app). Note the Client ID and Client Secret.
-2. If the OAuth consent screen is in "Testing" mode, add the target mailbox
-   as a test user, or publish the app.
-3. Run a one-time local OAuth flow (`google.auth.OAuth2` +
-   `access_type: 'offline', prompt: 'consent'`, scope
-   `https://www.googleapis.com/auth/gmail.modify`) to get a refresh token.
-4. Fill in the three placeholder functions using `googleapis`'s
-   `gmail.users.messages.list` / `.get` / `.modify`, and add `googleapis` back
-   to `package.json` dependencies.
-5. Set the three `GMAIL_*` GitHub Secrets to real values.
-
-## Notes / things I'm not certain about
-
-- Field parsing assumes AltaVista's fixed label order (per Jon: "the email is
-  always the same"). If their template changes, a message will land in the
-  "could not extract Name or Email" skip path rather than crash.
-- No persistent cache - GitHub Actions runners are stateless. Dedup relies on
-  the Gmail processed-label (once implemented) plus an existing-open-deal
-  check in Pipedrive.
-- No dry-run mode yet, and no failure alerting (a failed Actions run only
-  shows up if someone checks the Actions tab).
+The worker uses Node.js 20+ and has no runtime package dependencies.

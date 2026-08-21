@@ -2,7 +2,7 @@
   "name": "altavista-leads",
   "version": "1.0.0",
   "private": true,
-  "description": "Watches Gmail for AltaVista lead emails and creates Pipedrive deals. Gmail fetching is currently a placeholder - see README.",
+  "description": "Reads Pipedrive mailbox AltaVista lead emails and creates Pipedrive deals.",
   "type": "commonjs",
   "engines": {
     "node": ">=20"
