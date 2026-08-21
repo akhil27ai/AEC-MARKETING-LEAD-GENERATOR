@@ -1,73 +1,114 @@
 # AltaVista Leads -> Pipedrive
 
-Runs a Node.js worker every 15 minutes from GitHub Actions. The worker reads
-the currently synced Pipedrive mailbox for `akhil@automationinterns.com`,
-identifies forwarded AltaVista lead messages, and creates CRM records in this
-order:
+Production worker for converting forwarded AltaVista lead emails into Pipedrive
+CRM records.
+
+The worker runs from GitHub Actions every 15 minutes, reads the currently synced
+Pipedrive mailbox for `akhil@automationinterns.com`, identifies AltaVista lead
+messages, and creates Pipedrive records in this exact order:
 
 1. Find or create Organization.
 2. Find or create Person linked to that Organization.
 3. Create Deal linked to both.
 
-There is no Gmail API integration, Google Cloud project, OAuth client, Gmail
-refresh token, or `googleapis` dependency.
+There is intentionally no Gmail API integration:
 
-## How Matching Works
+- No Google Cloud project.
+- No OAuth client.
+- No Gmail refresh token.
+- No `googleapis` dependency.
 
-The worker scans Pipedrive inbox mail threads, then fetches and evaluates each
-individual message inside the thread. A message is treated as an AltaVista lead
-only when all of these are true:
+## Current Status
 
-- The subject matches `ALTAVISTA_SUBJECT_MATCH` after normalizing prefixes such
-  as `Fwd:` and `Re:`.
+- GitHub Actions schedule: `*/15 * * * *`.
+- Runtime: Node.js 24 in GitHub Actions.
+- Pipedrive domain: `aether`.
+- Pipeline: `28` (`Phoenix-BizDev`).
+- Stage: `178` (`Qualified`).
+- Deal duplicate field: `AltaVista Intake Key`.
+- Deal duplicate field API key: `78247fb086fa8f461048aebecef5ed0e65ec436c`.
+- Required GitHub secret: `PIPEDRIVE_API_TOKEN`.
+- Last verified workflow run: success on commit `57cacb4`.
+
+## How It Works
+
+The worker uses Pipedrive's Mailbox API as the only email source. If the mailbox
+changes later, connect the replacement mailbox to the same Pipedrive user; no
+code change is required.
+
+For each run, the worker:
+
+1. Lists inbox mail threads from Pipedrive.
+2. Fetches the individual messages inside each thread.
+3. Matches AltaVista messages by normalized subject, body markers, and expected
+   field labels.
+4. Extracts lead fields from the message body.
+5. Checks the `AltaVista Intake Key` custom deal field for duplicates.
+6. Creates or reuses CRM records in Pipedrive.
+7. Links the original Pipedrive email conversation to the deal.
+8. Shares the matched conversation with the team, marks it read, and archives it
+   after successful processing.
+
+Non-matching conversations are not shared or archived by the worker.
+
+## AltaVista Matching Rules
+
+A message is treated as an AltaVista lead only when all of these conditions are
+true:
+
+- The subject matches `ALTAVISTA_SUBJECT_MATCH` after normalizing common prefixes
+  such as `Fwd:`, `FW:`, and `Re:`.
 - The body contains an AltaVista marker such as `AltaVista`, `Alta Vista`, or
   `altavistasp.com`.
-- The parsed body contains the expected fields `Name:`, `Email:`, and
+- The parsed body contains required fields including `Name:`, `Email:`, and
   `Inquiry:`.
 
-This is deliberate: one Pipedrive conversation can contain more than one email,
-so duplicate detection and deal creation happen per message, not per
-conversation.
+Matching happens per message, not per Pipedrive conversation, because one
+conversation can contain multiple forwarded emails.
 
 ## Duplicate Protection
 
-The account now has a deal custom field named `AltaVista Intake Key`. The worker
-stores a stable hash of the lead content in that field and searches it before
-creating a deal. This prevents duplicates even if the mailbox changes later or
-the same lead is forwarded again.
+The worker creates a stable intake key from normalized AltaVista lead content and
+stores it in the `AltaVista Intake Key` custom deal field. Before creating a new
+deal, it searches that field through Pipedrive API v2.
 
-## Successful Processing
+This prevents duplicate deals even when:
 
-After all matched AltaVista messages in a Pipedrive conversation are processed,
-the worker links the mailbox thread to the created or existing deal, shares that
-matched thread with the team, marks it read, and archives it. Non-matching
-threads are not shared or archived by the worker.
-
-If the synced mailbox changes later, connect the replacement mailbox to the same
-Pipedrive user. The code reads through Pipedrive Mailbox API and does not depend
-on the mailbox provider.
+- The same AltaVista email is forwarded again.
+- A Pipedrive conversation changes.
+- The synced mailbox is replaced later.
 
 ## Configuration
 
-Local config lives in `.env` and GitHub Actions config lives in repository
-secrets or workflow env values.
+Keep configuration limited to these values:
 
-| Name | Purpose |
-|---|---|
-| `PIPEDRIVE_API_TOKEN` | Pipedrive API token |
-| `PIPEDRIVE_DOMAIN` | Pipedrive company domain, e.g. `aether` |
-| `PIPEDRIVE_PIPELINE_ID` | Pipeline ID for new deals |
-| `PIPEDRIVE_STAGE_ID` | Stage ID for new deals |
-| `ALTAVISTA_INTAKE_KEY_FIELD` | API key for the `AltaVista Intake Key` deal custom field |
-| `ALTAVISTA_SUBJECT_MATCH` | Normalized subject target |
-| `ALTAVISTA_MAX_AGE_HOURS` | Maximum message age to process |
-| `ALTAVISTA_BATCH_SIZE` | Inbox thread batch size per run |
+| Name | Source | Purpose |
+|---|---|---|
+| `PIPEDRIVE_API_TOKEN` | GitHub secret / local `.env` | Pipedrive API token |
+| `PIPEDRIVE_DOMAIN` | Workflow / local `.env` | Pipedrive company domain |
+| `PIPEDRIVE_PIPELINE_ID` | Workflow / local `.env` | Pipeline for new deals |
+| `PIPEDRIVE_STAGE_ID` | Workflow / local `.env` | Stage for new deals |
+| `ALTAVISTA_INTAKE_KEY_FIELD` | Workflow / local `.env` | Deal custom field API key |
+| `ALTAVISTA_SUBJECT_MATCH` | Workflow / local `.env` | Normalized subject target |
+| `ALTAVISTA_MAX_AGE_HOURS` | Workflow / local `.env` | Maximum message age to process |
+| `ALTAVISTA_BATCH_SIZE` | Workflow / local `.env` | Inbox thread batch size per run |
 
-Current live values:
+The local `.env` file is ignored by Git and should contain the real token for
+local testing. GitHub Actions uses the repository secret `PIPEDRIVE_API_TOKEN`.
 
-- `PIPEDRIVE_DOMAIN=aether`
-- `PIPEDRIVE_PIPELINE_ID=28` (`Phoenix-BizDev`)
-- `PIPEDRIVE_STAGE_ID=178` (`Qualified`)
+## GitHub Actions
+
+Workflow file: `.github/workflows/altavista-leads.yml`
+
+The workflow:
+
+- Runs every 15 minutes.
+- Supports manual `workflow_dispatch`.
+- Uses `actions/checkout@v6`.
+- Uses `actions/setup-node@v7`.
+- Runs Node.js `24`.
+- Installs with `npm install`.
+- Starts the worker with `node scripts/altavista-leads.js`.
 
 ## Running Locally
 
@@ -76,4 +117,20 @@ npm install
 npm start
 ```
 
-The worker uses Node.js 20+ and has no runtime package dependencies.
+The project has no runtime package dependencies.
+
+## Verification
+
+Useful checks:
+
+```sh
+node --check scripts/altavista-leads.js
+npm start
+gh run list --workflow altavista-leads.yml --limit 5
+```
+
+Expected successful no-match output:
+
+```text
+Run finished: 0 AltaVista message(s) matched, 0 processed
+```
