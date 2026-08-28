@@ -40,8 +40,8 @@ For each run, the worker:
 
 1. Lists inbox mail threads from Pipedrive.
 2. Fetches the individual messages inside each thread.
-3. Matches AltaVista messages by normalized subject, body markers, and expected
-   field labels.
+3. Matches AltaVista messages by trusted sender or by normalized subject plus
+   body markers, while still requiring expected field labels.
 4. Extracts lead fields from the message body.
 5. Checks the `AltaVista Intake Key` custom deal field for duplicates.
 6. Creates or reuses CRM records in Pipedrive.
@@ -53,15 +53,17 @@ Non-matching conversations are not shared or archived by the worker.
 
 ## AltaVista Matching Rules
 
-A message is treated as an AltaVista lead only when all of these conditions are
-true:
+A message is treated as an AltaVista lead only when the parsed body contains the
+required fields `Name:`, `Email:`, and `Inquiry:` plus one of these source
+signals:
 
-- The subject matches `ALTAVISTA_SUBJECT_MATCH` after normalizing common prefixes
-  such as `Fwd:`, `FW:`, and `Re:`.
-- The body contains an AltaVista marker such as `AltaVista`, `Alta Vista`, or
-  `altavistasp.com`.
-- The parsed body contains required fields including `Name:`, `Email:`, and
-  `Inquiry:`.
+- The message is from or forwarded from `mward@altavistasp.com`.
+- The subject matches `ALTAVISTA_SUBJECT_MATCH` after normalizing common
+  prefixes such as `Fwd:`, `FW:`, and `Re:`, and the body contains an AltaVista
+  marker such as `AltaVista`, `Alta Vista`, or `altavistasp.com`.
+
+Discussion threads that merely mention AltaVista or Panera are inspected but
+skipped because they do not contain the required lead fields.
 
 Matching happens per message, not per Pipedrive conversation, because one
 conversation can contain multiple forwarded emails.

@@ -11,6 +11,7 @@ const ALTAVISTA_SUBJECT_MATCH_DEFAULT = 'AltaVista Client Opportunity';
 const ALTAVISTA_BATCH_SIZE_DEFAULT = 25;
 const ALTAVISTA_MAX_AGE_HOURS_DEFAULT = 168;
 const ALTAVISTA_MARKERS = ['altavista', 'alta vista', 'altavistasp.com'];
+const ALTAVISTA_SOURCE_EMAILS = ['mward@altavistasp.com'];
 
 const FIELD_LABELS = [
   { key: 'name', label: 'Name' },
@@ -255,11 +256,61 @@ function hasAltaVistaBodyMarker(body) {
   return ALTAVISTA_MARKERS.some((marker) => normalized.includes(marker));
 }
 
-function isAltaVistaMessage(message, fields, cfg) {
+function extractEmails(value) {
+  const matches = String(value || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi);
+  return matches ? matches.map((email) => normalizeEmail(email)).filter(Boolean) : [];
+}
+
+function partyEmails(parties) {
+  const list = Array.isArray(parties) ? parties : [parties];
+  const emails = [];
+
+  for (const party of list) {
+    if (!party) continue;
+    if (typeof party === 'object') {
+      emails.push(...extractEmails(party.email_address || party.email || ''));
+      emails.push(...extractEmails(party.name || ''));
+    } else {
+      emails.push(...extractEmails(party));
+    }
+  }
+
+  return emails;
+}
+
+function hasAltaVistaSource(message) {
+  const emails = [
+    ...partyEmails(message.from),
+    ...partyEmails(message.sender),
+    ...partyEmails(message.reply_to || message.replyTo),
+    ...extractEmails(message.body || message.snippet || ''),
+  ];
+
+  return emails.some((email) => ALTAVISTA_SOURCE_EMAILS.includes(email));
+}
+
+function shouldInspectMessageSummary(summary, thread, cfg) {
+  const subject = summary.subject || thread.subject || '';
   return (
-    subjectMatches(message.subject, cfg.subjectMatch) &&
-    hasAltaVistaBodyMarker(message.body || message.snippet || '') &&
-    Boolean(fields.name && fields.email && fields.inquiry)
+    subjectMatches(subject, cfg.subjectMatch) ||
+    hasAltaVistaSource(summary) ||
+    hasAltaVistaBodyMarker(summary.snippet || '')
+  );
+}
+
+function isAltaVistaMessage(message, fields, cfg) {
+  const hasExpectedFields = Boolean(fields.name && fields.email && fields.inquiry);
+  const hasExpectedSource = hasAltaVistaSource(message);
+
+  return (
+    hasExpectedFields &&
+    (
+      hasExpectedSource ||
+      (
+        subjectMatches(message.subject, cfg.subjectMatch) &&
+        hasAltaVistaBodyMarker(message.body || message.snippet || '')
+      )
+    )
   );
 }
 
@@ -464,7 +515,7 @@ async function processThread(thread, cfg) {
 
   for (const summary of summaries) {
     const subject = summary.subject || thread.subject || '';
-    if (!subjectMatches(subject, cfg.subjectMatch)) continue;
+    if (!shouldInspectMessageSummary(summary, thread, cfg)) continue;
 
     const message = await fetchMailMessage(summary.id, cfg);
     message.subject = message.subject || subject;
@@ -525,6 +576,8 @@ module.exports = {
   normalizeEmail,
   buildIntakeKey,
   isAltaVistaMessage,
+  hasAltaVistaSource,
+  shouldInspectMessageSummary,
   organizationNameFor,
   escapeHtml,
 };
